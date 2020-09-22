@@ -275,3 +275,71 @@ func LabelValue(name string) string {
 	klog.Warningf("In creating the value of the build label in the build pod, several attempts at manipulating %s to meet k8s label name requirements failed", name)
 	return name
 }
+
+func fromMatch(from1 *corev1.ObjectReference, from2 *corev1.ObjectReference) bool {
+	if from1 == nil && from2 == nil {
+		return true
+	}
+	if from1 == nil && from2 != nil {
+		return false
+	}
+	if from2 == nil && from1 != nil {
+		return false
+	}
+	if from1.Kind == from2.Kind && from1.Namespace == from2.Namespace && from1.Name == from2.Name {
+		return true
+	}
+	return false
+}
+
+// GetImageChageTriggerStatusForImageChangeTrigger returns the ImageChangeTrigger entry in status that corresponds
+// to the supplied ImagaeChangeTrigger entry in the spec.
+func GetImageChageTriggerStatusForImageChangeTrigger(triggerSpec *buildv1.ImageChangeTrigger, bc *buildv1.BuildConfig) *buildv1.ImageChangeTriggerStatus {
+	if bc.Status.ImageChangeTriggers == nil || len(bc.Status.ImageChangeTriggers) == 0 {
+		return nil
+	}
+	for _, ict := range bc.Status.ImageChangeTriggers {
+		if fromMatch(triggerSpec.From, ict.From) {
+			return &ict
+		}
+	}
+	// reminder: bc validation only allows one ICT with a nil from
+	/*if triggerSpec.From == nil {
+		for _, ict := range bc.Status.ImageChangeTriggers {
+			if ict.From == nil {
+				return &ict
+			}
+		}
+		return nil
+	}
+	for _, ict := range bc.Status.ImageChangeTriggers {
+		if ict.From != nil {
+			from := ict.From
+			statusK := from.Kind
+			statusNS := from.Namespace
+			statusN := from.Name
+			specK := from.Kind
+			specNS := from.Namespace
+			specN := from.Name
+			if statusK == specK && statusNS == specNS && statusN == specN {
+				return &ict
+			}
+
+		}
+	}*/
+	return nil
+}
+
+// GetImageChageTriggerForImageChangeTriggerStatus returns the ImageChangeTrigger entry in spec that corresponds
+// to the supplied ImageChangeTrigger entry in status.
+func GetImageChageTriggerForImageChangeTriggerStatus(triggerStatus *buildv1.ImageChangeTriggerStatus, bc *buildv1.BuildConfig) *buildv1.ImageChangeTrigger {
+	for _, t := range bc.Spec.Triggers {
+		if t.ImageChange == nil {
+			continue
+		}
+		if fromMatch(triggerStatus.From, t.ImageChange.From) {
+			return t.ImageChange
+		}
+	}
+	return nil
+}

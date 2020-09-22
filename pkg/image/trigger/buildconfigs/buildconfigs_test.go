@@ -44,6 +44,12 @@ func testBuildConfig(params []buildv1.ImageChangeTrigger) *buildv1.BuildConfig {
 	}
 	for i := range params {
 		obj.Spec.Triggers = append(obj.Spec.Triggers, buildv1.BuildTriggerPolicy{ImageChange: &params[i]})
+		obj.Status.ImageChangeTriggers = append(obj.Status.ImageChangeTriggers, buildv1.ImageChangeTriggerStatus{
+			LastTriggeredImageID: params[i].LastTriggeredImageID,
+			From:                 params[i].From,
+			Paused:               params[i].Paused,
+			LastTriggerTime:      metav1.Now(),
+		})
 	}
 	return obj
 }

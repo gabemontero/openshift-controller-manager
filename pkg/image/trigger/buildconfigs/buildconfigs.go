@@ -22,6 +22,7 @@ import (
 	buildclientv1 "github.com/openshift/client-go/build/clientset/versioned/typed/build/v1"
 	"github.com/openshift/library-go/pkg/build/buildutil"
 	triggerutil "github.com/openshift/library-go/pkg/image/trigger"
+	ocmbuildutil "github.com/openshift/openshift-controller-manager/pkg/build/buildutil"
 	"github.com/openshift/openshift-controller-manager/pkg/image/trigger"
 )
 
@@ -175,9 +176,22 @@ func (r *buildConfigReactor) ImageChanged(obj runtime.Object, tagRetriever trigg
 			newSource = true
 		}
 
-		// LastTriggeredImageID is an image ref, despite the name
-		if latest == p.LastTriggeredImageID {
-			continue
+		// see if this trigger has fired previously and is recorded in status;
+		// openshfit-apiserver is in charge of populating the status for image change triggers,
+		// including resolving LastTriggeredImageID and LastTriggerTime
+		pStatus := ocmbuildutil.GetImageChageTriggerStatusForImageChangeTrigger(p, bc)
+		if pStatus != nil {
+			// LastTriggeredImageID is an image ref, despite the name
+			if latest == pStatus.LastTriggeredImageID {
+				continue
+			}
+		} else {
+			//TODO until openshift-apiserver is updated to maintain image triggers in the status,
+			// we still need to check the deprecated spec field; once the openshift-apiserver PR
+			// merges we can remove this else block
+			if latest == p.LastTriggeredImageID {
+				continue
+			}
 		}
 
 		// prevent duplicate build trigger causes
