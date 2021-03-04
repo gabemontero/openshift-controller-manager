@@ -277,6 +277,7 @@ func LabelValue(name string) string {
 }
 
 func fromMatch(from1 *corev1.ObjectReference, from2 *corev1.ObjectReference) bool {
+	// reminder: bc validation only allows one ICT with a nil from
 	if from1 == nil && from2 == nil {
 		return true
 	}
@@ -293,41 +294,17 @@ func fromMatch(from1 *corev1.ObjectReference, from2 *corev1.ObjectReference) boo
 }
 
 // GetImageChageTriggerStatusForImageChangeTrigger returns the ImageChangeTrigger entry in status that corresponds
-// to the supplied ImagaeChangeTrigger entry in the spec.
-func GetImageChageTriggerStatusForImageChangeTrigger(triggerSpec *buildv1.ImageChangeTrigger, bc *buildv1.BuildConfig) *buildv1.ImageChangeTriggerStatus {
+// to the supplied ImagaeChangeTrigger entry in the spec.  The index into the array is also returned in case modifications are needed.
+func GetImageChageTriggerStatusForImageChangeTrigger(triggerSpec *buildv1.ImageChangeTrigger, bc *buildv1.BuildConfig) (*buildv1.ImageChangeTriggerStatus, int) {
 	if bc.Status.ImageChangeTriggers == nil || len(bc.Status.ImageChangeTriggers) == 0 {
-		return nil
+		return nil, -1
 	}
-	for _, ict := range bc.Status.ImageChangeTriggers {
+	for index, ict := range bc.Status.ImageChangeTriggers {
 		if fromMatch(triggerSpec.From, ict.From) {
-			return &ict
+			return &ict, index
 		}
 	}
-	// reminder: bc validation only allows one ICT with a nil from
-	/*if triggerSpec.From == nil {
-		for _, ict := range bc.Status.ImageChangeTriggers {
-			if ict.From == nil {
-				return &ict
-			}
-		}
-		return nil
-	}
-	for _, ict := range bc.Status.ImageChangeTriggers {
-		if ict.From != nil {
-			from := ict.From
-			statusK := from.Kind
-			statusNS := from.Namespace
-			statusN := from.Name
-			specK := from.Kind
-			specNS := from.Namespace
-			specN := from.Name
-			if statusK == specK && statusNS == specNS && statusN == specN {
-				return &ict
-			}
-
-		}
-	}*/
-	return nil
+	return nil, -1
 }
 
 // GetImageChageTriggerForImageChangeTriggerStatus returns the ImageChangeTrigger entry in spec that corresponds

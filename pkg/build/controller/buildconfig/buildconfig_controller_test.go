@@ -23,6 +23,8 @@ func TestHandleBuildConfig(t *testing.T) {
 		expectBuild       bool
 		instantiatorError bool
 		expectErr         bool
+		oldTriggers       []tagTriggerID
+		currentTriggers   []tagTriggerID
 	}{
 		{
 			name:        "build config with no config change trigger",
@@ -44,6 +46,94 @@ func TestHandleBuildConfig(t *testing.T) {
 			bc:                buildConfigWithConfigChangeTrigger(),
 			instantiatorError: true,
 			expectErr:         true,
+		},
+		{
+			name: "handle ict pause update",
+			bc:   baseBuildConfig(),
+			oldTriggers: []tagTriggerID{
+				{
+					Paused: false,
+				},
+			},
+			currentTriggers: []tagTriggerID{
+				{
+					Paused: true,
+				},
+			},
+		},
+		{
+			name: "handle ict add non-nil from",
+			bc:   baseBuildConfig(),
+			oldTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+			},
+			currentTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+				{
+					ImageStreamTag:  "dev:latest",
+					LastTriggeredId: "ghijkl0",
+				},
+			},
+		},
+		{
+			name: "handle ict add nil from",
+			bc:   baseBuildConfig(),
+			oldTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+			},
+			currentTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+				{},
+			},
+		},
+		{
+			name: "handle ict remove nil from",
+			bc:   baseBuildConfig(),
+			oldTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+				{},
+			},
+			currentTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+			},
+		},
+		{
+			name: "handle ict remove non-nil from",
+			bc:   baseBuildConfig(),
+			currentTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+			},
+			oldTriggers: []tagTriggerID{
+				{
+					ImageStreamTag:  "test:latest",
+					LastTriggeredId: "abcdef0",
+				},
+				{
+					ImageStreamTag:  "dev:latest",
+					LastTriggeredId: "ghijkl0",
+				},
+			},
 		},
 	}
 
@@ -78,6 +168,14 @@ func TestHandleBuildConfig(t *testing.T) {
 				return true, &buildv1.Build{}, nil
 			})
 		}
+		// set status with old settings
+		if len(tc.oldTriggers) > 0 {
+			tc.bc = buildConfigWithImageChangeTriggerStatuses(tc.oldTriggers, tc.bc)
+		}
+		// set spec with new settings
+		if len(tc.currentTriggers) > 0 {
+			tc.bc = buildConfigWithImageChangeTriggers(tc.currentTriggers, tc.bc)
+		}
 		controller := &BuildConfigController{
 			buildLister:       &okBuildLister{},
 			buildConfigGetter: buildClient.BuildV1(),
@@ -101,6 +199,26 @@ func TestHandleBuildConfig(t *testing.T) {
 		}
 		if !tc.expectBuild && len(instantiateRequestName) > 0 {
 			t.Errorf("%s: did not expect a build to be started.", tc.name)
+		}
+		// make sure status has new settings
+		if len(tc.currentTriggers) != len(tc.bc.Status.ImageChangeTriggers) {
+			t.Errorf("%s: number of ICTs incorrect", tc.name)
+		}
+		for index, ict := range tc.bc.Status.ImageChangeTriggers {
+			if ict.Paused != tc.currentTriggers[index].Paused {
+				t.Errorf("%s: paused did not match.", tc.name)
+			}
+			if len(tc.currentTriggers[index].ImageStreamTag) == 0 && ict.From != nil {
+				t.Errorf("%s: empty IST in spec but status has non-nil from", tc.name)
+			}
+			if len(tc.currentTriggers[index].ImageStreamTag) != 0 && ict.From == nil {
+				t.Errorf("%s: IST in spec but status has nil from", tc.name)
+			}
+			if len(tc.currentTriggers[index].ImageStreamTag) != 0 && ict.From != nil {
+				if tc.currentTriggers[index].ImageStreamTag != ict.From.Name {
+					t.Errorf("%s: IST in spec %s does not match status from %s", tc.name, tc.currentTriggers[index].ImageStreamTag, ict.From.Name)
+				}
+			}
 		}
 	}
 
@@ -218,7 +336,9 @@ func TestCheckImageChangeTriggerCleared(t *testing.T) {
 
 			var current *buildv1.BuildConfig
 			if !tc.setCurrentNil {
-				current = buildConfigWithImageChangeTriggers(tc.currentTriggers)
+				current = buildConfigWithImageChangeTriggers(tc.currentTriggers, nil)
+				// make sure presence of status data does not interfere
+				current = buildConfigWithImageChangeTriggerStatuses(tc.currentTriggers, current)
 			}
 			if current != nil {
 				objects = append(objects, current)
@@ -233,7 +353,9 @@ func TestCheckImageChangeTriggerCleared(t *testing.T) {
 			}
 			var old *buildv1.BuildConfig
 			if !tc.setOldNil {
-				old = buildConfigWithImageChangeTriggers(tc.oldTriggers)
+				old = buildConfigWithImageChangeTriggers(tc.oldTriggers, nil)
+				// make sure presence of status data does not interfere
+				old = buildConfigWithImageChangeTriggerStatuses(tc.oldTriggers, old)
 			}
 			changed := controller.imageChangeTriggerCleared(old, current)
 			if changed != tc.expectedResult {
@@ -266,11 +388,14 @@ func buildConfigWithNonZeroLastVersion() *buildv1.BuildConfig {
 	return bc
 }
 
-func buildConfigWithImageChangeTriggers(triggers []tagTriggerID) *buildv1.BuildConfig {
-	bc := baseBuildConfig()
+func buildConfigWithImageChangeTriggers(triggers []tagTriggerID, bc *buildv1.BuildConfig) *buildv1.BuildConfig {
+	if bc == nil {
+		bc = baseBuildConfig()
+	}
 	for _, trigger := range triggers {
 		imageChangeTrigger := &buildv1.ImageChangeTrigger{
 			LastTriggeredImageID: trigger.LastTriggeredId,
+			Paused:               trigger.Paused,
 		}
 		if len(trigger.ImageStreamTag) > 0 {
 			imageChangeTrigger.From = &corev1.ObjectReference{
@@ -286,9 +411,27 @@ func buildConfigWithImageChangeTriggers(triggers []tagTriggerID) *buildv1.BuildC
 	return bc
 }
 
+func buildConfigWithImageChangeTriggerStatuses(triggers []tagTriggerID, bc *buildv1.BuildConfig) *buildv1.BuildConfig {
+	for _, trigger := range triggers {
+		imageChangeTrigger := buildv1.ImageChangeTriggerStatus{
+			LastTriggeredImageID: trigger.LastTriggeredId,
+			Paused:               trigger.Paused,
+		}
+		if len(trigger.ImageStreamTag) > 0 {
+			imageChangeTrigger.From = &corev1.ObjectReference{
+				Kind: "ImageStreamTag",
+				Name: trigger.ImageStreamTag,
+			}
+		}
+		bc.Status.ImageChangeTriggers = append(bc.Status.ImageChangeTriggers, imageChangeTrigger)
+	}
+	return bc
+}
+
 type tagTriggerID struct {
 	ImageStreamTag  string
 	LastTriggeredId string
+	Paused          bool
 }
 
 type okBuildLister struct{}

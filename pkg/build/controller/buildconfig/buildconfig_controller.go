@@ -103,6 +103,56 @@ func (c *BuildConfigController) handleBuildConfig(bc *buildv1.BuildConfig) error
 		utilruntime.HandleError(fmt.Errorf("failed to prune builds for %s/%s: %v", bc.Namespace, bc.Name, err))
 	}
 
+	// with ICTs now reflected in status, some reconciliation here makes sense; but note, the image trigger id and trigger timestamp
+	// are maintained by the openshift-apiserver, we only reconcile the paused and from settings
+	ictChange := false
+	for _, trigger := range bc.Spec.Triggers {
+		if trigger.ImageChange == nil {
+			continue
+		}
+		triggerStatus, index := buildutil.GetImageChageTriggerStatusForImageChangeTrigger(trigger.ImageChange, bc)
+		if triggerStatus != nil {
+			if triggerStatus.Paused != trigger.ImageChange.Paused {
+				bc.Status.ImageChangeTriggers[index].Paused = trigger.ImageChange.Paused
+				ictChange = true
+			}
+
+			// we do not care if a given from references is at the same index in the spec as it is in the status;
+			// as long as there are corresponding entries, we are good;
+			// reminder, bc validation only allows one ict with a nil from; if spec has a nil from and we
+			// got a non-nil status returned, we have the corresponding entry in status and don't need to make
+			// an update here
+		} else {
+			ictChange = true
+			bc.Status.ImageChangeTriggers = append(bc.Status.ImageChangeTriggers, buildv1.ImageChangeTriggerStatus{
+				From:   trigger.ImageChange.From,
+				Paused: trigger.ImageChange.Paused,
+			})
+		}
+	}
+	// we have added missing spec ICTs to status, made pause updates to existing entries; now remove stale status ICTs with no corresponding spec entry
+	for index, trigger := range bc.Status.ImageChangeTriggers {
+		triggerSpec := buildutil.GetImageChageTriggerForImageChangeTriggerStatus(&trigger, bc)
+		if triggerSpec != nil {
+			continue
+		}
+		ictChange = true
+		// see https://stackoverflow.com/questions/37334119/how-to-delete-an-element-from-a-slice-in-golang
+		// delete the entry
+		bc.Status.ImageChangeTriggers[index] = bc.Status.ImageChangeTriggers[len(bc.Status.ImageChangeTriggers)-1]
+		bc.Status.ImageChangeTriggers = bc.Status.ImageChangeTriggers[:len(bc.Status.ImageChangeTriggers)-1]
+	}
+	if ictChange {
+		_, err := c.buildConfigGetter.BuildConfigs(bc.Namespace).UpdateStatus(context.TODO(), bc, metav1.UpdateOptions{})
+		if err != nil {
+			if !kerrors.IsConflict(err) {
+				c.recorder.Event(bc, corev1.EventTypeWarning, "BuildConfigUpdateError", err.Error())
+			}
+			utilruntime.HandleError(err)
+			return err
+		}
+	}
+
 	hasChangeTrigger := buildutil.HasTriggerType(buildv1.ConfigChangeBuildTriggerType, bc)
 
 	if !hasChangeTrigger {

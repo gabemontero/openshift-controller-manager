@@ -179,7 +179,7 @@ func (r *buildConfigReactor) ImageChanged(obj runtime.Object, tagRetriever trigg
 		// see if this trigger has fired previously and is recorded in status;
 		// openshfit-apiserver is in charge of populating the status for image change triggers,
 		// including resolving LastTriggeredImageID and LastTriggerTime
-		pStatus := ocmbuildutil.GetImageChageTriggerStatusForImageChangeTrigger(p, bc)
+		pStatus, _ := ocmbuildutil.GetImageChageTriggerStatusForImageChangeTrigger(p, bc)
 		if pStatus != nil {
 			// LastTriggeredImageID is an image ref, despite the name
 			if latest == pStatus.LastTriggeredImageID {
